@@ -62,7 +62,7 @@ class BLEHRMConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the interactive setup wizard (Scan, filter and choose)."""
+        """Handle the interactive setup wizard (Scan, filter, deduplicate, and choose)."""
         if user_input is not None:
             selected_address = user_input[CONF_DEVICE_ADDRESS]
             
@@ -72,7 +72,6 @@ class BLEHRMConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(selected_address.upper())
             self._abort_if_unique_id_configured()
             
-            # Extract the user-friendly device identity string from cache mappings
             friendly_name = self._discovered_devices.get(selected_address, selected_address)
             clean_name = friendly_name.split(" (")[0]
             
@@ -84,18 +83,28 @@ class BLEHRMConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 },
             )
 
-        # Query Home Assistant's central Bluetooth cache for live proxy captures
+        # 1. Fetch unique IDs of all integrations that have already been configured
+        configured_addresses = {
+            entry.unique_id for entry in self._async_current_entries()
+            if entry.unique_id
+        }
+
+        # 2. Query Home Assistant's central Bluetooth cache for live proxy captures
         current_discoveries = async_discovered_service_info(self.hass, connectable=True)
         
         self._discovered_devices = {}
         for discovery in current_discoveries:
-            # Audit every device broadcast signature in the area for the HR service token
             if HEART_RATE_SERVICE_UUID in discovery.service_uuids:
                 address = discovery.address.upper()
+                
+                # 3. Deduplication Check: Skip it if it's already added to Home Assistant
+                if address in configured_addresses:
+                    continue
+                    
                 name = discovery.name or "Unknown HRM Device"
                 self._discovered_devices[address] = f"{name} ({address})"
 
-        # Insert manual bypass hook in case their strap is currently asleep
+        # Insert manual bypass hook
         self._discovered_devices["manual"] = "Configure a device address manually..."
 
         return self.async_show_form(
