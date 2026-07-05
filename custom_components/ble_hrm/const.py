@@ -1,5 +1,5 @@
 """Constants for the Generic BLE HRM integration."""
-DOMAIN = "generic_ble_hrm"
+DOMAIN = "ble_hrm"
 
 # Standard Bluetooth SIG UUIDs
 HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
