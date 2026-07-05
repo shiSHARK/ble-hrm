@@ -1,16 +1,18 @@
 {
   "domain": "ble_hrm",
   "name": "BLE Heart Rate Monitor",
+  "version": "1.0.0",
+  "documentation": "https://github.com/shiSHARK/ble-hrm",
+  "issue_tracker": "https://github.com/shiSHARK/ble-hrm/issues",
   "codeowners": ["@shiSHARK"],
   "config_flow": true,
   "iot_class": "local_push",
   "requirements": ["bleak>=0.21.0"],
-  "version": "1.0.0",
+  "dependencies": ["bluetooth"],
   "bluetooth": [
     {
       "service_uuids": ["0000180d-0000-1000-8000-00805f9b34fb"],
       "connectable": true
     }
-  ],
-  "dependencies": ["bluetooth"]
+  ]
 }
