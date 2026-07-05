@@ -47,8 +47,9 @@ async def async_setup_entry(
     
     async_add_entities(entities)
     
-    # Establish persistent listening loops outside the initialization flow
+    # Establish persistent tracking loops outside the main thread flow
     entry.async_on_unload(manager.setup_tracking())
+
 
 class BLEConnectionManager:
     """Manages continuous active GATT socket streams over HA Proxies."""
@@ -76,7 +77,11 @@ class BLEConnectionManager:
             listener()
 
     @callback
-    def handle_availability_change(self, service_info: bluetooth.BluetoothServiceInfoBleak) -> None:
+    def handle_availability_change(
+        self, 
+        service_info: bluetooth.BluetoothServiceInfoBleak, 
+        change: bluetooth.BluetoothChange
+    ) -> None:
         """Fires whenever a proxy picks up an advertisement packet."""
         if not self.connected:
             self.hass.async_create_task(self.async_connect())
@@ -84,12 +89,11 @@ class BLEConnectionManager:
     @callback
     def handle_unavailable(self, address: str) -> None:
         """Fires automatically when the proxy network loses track of the device."""
-        _LOGGER.debug("Device went out of range or entered deep sleep.")
+        _LOGGER.debug("Device at %s went out of range or entered deep sleep.", address)
         self.hass.async_create_task(self.async_disconnect())
 
     def setup_tracking(self):
         """Bind connection manager hooks directly to HA core tracking."""
-        # Unsubscribe tracking tokens
         unload_track = bluetooth.async_register_callback(
             self.hass,
             self.handle_availability_change,
@@ -103,8 +107,8 @@ class BLEConnectionManager:
             self.address,
         )
         
-        # Fire initial connection scan attempt asynchronously
-        if ble_device := bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True):
+        # Fire initial connection scan attempt asynchronously if device is already in cache
+        if bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True):
             self.hass.async_create_task(self.async_connect())
 
         def _cleanup():
@@ -143,11 +147,11 @@ class BLEConnectionManager:
                     
                 self._notify_listeners()
             except Exception as err:
-                _LOGGER.debug("Proxy connection attempt deferred: %s", err)
+                _LOGGER.debug("Proxy connection attempt deferred for %s: %s", self.address, err)
                 self.connected = False
                 self.client = None
 
-    def _notification_handler(self, sender: int, data: bytearray) -> None:
+    def _notification_handler(self, characteristic: Any, data: bytearray) -> None:
         """Decode raw BLE Heart Rate byte arrays."""
         flags = data[0]
         if flags & 0x01:
@@ -194,7 +198,7 @@ class BLEHRMBaseSensor(SensorEntity):
 
     @property
     def available(self) -> bool:
-        """Reflect entity status safely."""
+        """Reflect entity status safely based on proxy link health."""
         return self.manager.connected
 
 
