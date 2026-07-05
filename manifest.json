@@ -1,0 +1,16 @@
+{
+  "domain": "generic_ble_hrm",
+  "name": "Generic BLE Heart Rate Monitor",
+  "codeowners": [],
+  "config_flow": true,
+  "iot_class": "local_push",
+  "requirements": ["bleak>=0.21.0"],
+  "version": "1.0.0",
+  "bluetooth": [
+    {
+      "service_uuids": ["0000180d-0000-1000-8000-00805f9b34fb"],
+      "connectable": true
+    }
+  ],
+  "dependencies": ["bluetooth"]
+}
