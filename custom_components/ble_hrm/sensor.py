@@ -46,8 +46,6 @@ async def async_setup_entry(
     ]
     
     async_add_entities(entities)
-    
-    # Establish persistent tracking loops outside the main thread flow
     entry.async_on_unload(manager.setup_tracking())
 
 
@@ -103,11 +101,9 @@ class BLEConnectionManager:
         
         unload_avail = bluetooth.async_track_unavailable(
             self.hass,
-            self.handle_unavailable,
             self.address,
         )
         
-        # Fire initial connection scan attempt asynchronously if device is already in cache
         if bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True):
             self.hass.async_create_task(self.async_connect())
 
@@ -128,17 +124,19 @@ class BLEConnectionManager:
             if not ble_device:
                 return
 
-            self.client = BleakClient(ble_device)
+            # Inject the disconnected callback handler to monitor external drops natively
+            self.client = BleakClient(
+                ble_device, 
+                disconnected_callback=self._handle_unexpected_disconnect
+            )
             try:
                 await self.client.connect()
                 self.connected = True
                 
-                # Setup standard event notification stream
                 await self.client.start_notify(
                     HEART_RATE_MEASUREMENT_UUID, self._notification_handler
                 )
                 
-                # Fetch baseline battery diagnostic metric once upon handshake
                 try:
                     bat_bytes = await self.client.read_gatt_char(BATTERY_LEVEL_UUID)
                     self.battery = int(bat_bytes[0])
@@ -150,6 +148,11 @@ class BLEConnectionManager:
                 _LOGGER.debug("Proxy connection attempt deferred for %s: %s", self.address, err)
                 self.connected = False
                 self.client = None
+
+    def _handle_unexpected_disconnect(self, client: BleakClient) -> None:
+        """Handle un-scheduled peripheral disconnections safely on the core loop."""
+        _LOGGER.debug("Strap at %s disconnected from proxy socket unexpectedly.", self.address)
+        self.hass.async_create_task(self.async_disconnect())
 
     def _notification_handler(self, characteristic: Any, data: bytearray) -> None:
         """Decode raw BLE Heart Rate byte arrays."""
