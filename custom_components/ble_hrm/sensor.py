@@ -1,4 +1,4 @@
-"""Sensor platform for event-driven BLE Heart Rate integration."""
+"""Sensor platform for event-driven BLE Heart Rate integration with Watchdog."""
 from __future__ import annotations
 
 import asyncio
@@ -28,6 +28,7 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+WATCHDOG_TIMEOUT = 30  # Seconds to wait for data before forcing a proxy roam
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -63,6 +64,7 @@ class BLEConnectionManager:
         self.heart_rate: int | None = None
         self.battery: int | None = None
         self._lock = asyncio.Lock()
+        self._watchdog_task: asyncio.Task | None = None
 
     def register_listener(self, listener: callback) -> callback:
         """Register entity listener update hooks."""
@@ -86,7 +88,7 @@ class BLEConnectionManager:
 
     @callback
     def handle_unavailable(self, address: str) -> None:
-        """Fires automatically when the proxy network loses track of the device."""
+        """Fires automatically when the proxy network completely loses track of the device."""
         _LOGGER.debug("Device at %s went out of range or entered deep sleep.", address)
         self.hass.async_create_task(self.async_disconnect())
 
@@ -101,6 +103,7 @@ class BLEConnectionManager:
         
         unload_avail = bluetooth.async_track_unavailable(
             self.hass,
+            self.handle_unavailable,
             self.address,
         )
         
@@ -124,7 +127,6 @@ class BLEConnectionManager:
             if not ble_device:
                 return
 
-            # Inject the disconnected callback handler to monitor external drops natively
             self.client = BleakClient(
                 ble_device, 
                 disconnected_callback=self._handle_unexpected_disconnect
@@ -144,18 +146,39 @@ class BLEConnectionManager:
                     self.battery = None
                     
                 self._notify_listeners()
+                self._reset_watchdog()  # Start the watchdog timer on successful connection
             except Exception as err:
                 _LOGGER.debug("Proxy connection attempt deferred for %s: %s", self.address, err)
                 self.connected = False
                 self.client = None
 
     def _handle_unexpected_disconnect(self, client: BleakClient) -> None:
-        """Handle un-scheduled peripheral disconnections safely on the core loop."""
+        """Handle un-scheduled peripheral disconnections safely."""
         _LOGGER.debug("Strap at %s disconnected from proxy socket unexpectedly.", self.address)
         self.hass.async_create_task(self.async_disconnect())
 
+    def _reset_watchdog(self) -> None:
+        """Resets the 30-second stale data watchdog timer."""
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+        self._watchdog_task = self.hass.async_create_task(self._async_watchdog_timeout())
+
+    async def _async_watchdog_timeout(self) -> None:
+        """Executes when no data packets arrive within the window threshold."""
+        try:
+            await asyncio.sleep(WATCHDOG_TIMEOUT)
+            _LOGGER.warning(
+                "No BLE data received for %d seconds from %s (Stale Connection). Forcing proxy roam.", 
+                WATCHDOG_TIMEOUT, self.address
+            )
+            await self.async_disconnect()
+        except asyncio.CancelledError:
+            pass
+
     def _notification_handler(self, characteristic: Any, data: bytearray) -> None:
-        """Decode raw BLE Heart Rate byte arrays."""
+        """Decode raw BLE Heart Rate byte arrays and kick the watchdog."""
+        self._reset_watchdog()  # <--- Fresh packet arrived! Kick the countdown back to 30.
+        
         flags = data[0]
         if flags & 0x01:
             self.heart_rate = int.from_bytes(data[1:3], byteorder="little")
@@ -166,6 +189,11 @@ class BLEConnectionManager:
     async def async_disconnect(self) -> None:
         """Clean breakdown of socket arrays to keep DB history uncorrupted."""
         async with self._lock:
+            # Cancel the watchdog loop so it doesn't trigger a circular disconnect loop
+            if self._watchdog_task:
+                self._watchdog_task.cancel()
+                self._watchdog_task = None
+                
             self.heart_rate = None
             self.battery = None
             self.connected = False
